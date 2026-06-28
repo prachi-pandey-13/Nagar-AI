@@ -1,0 +1,42 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+@import "tailwindcss";
+@import "leaflet/dist/leaflet.css";
+
+@variant dark (&:where(.dark, .dark *));
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Space Grotesk", sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+}
+
+/* Custom leaflet styles to make markers render properly */
+.leaflet-container {
+  font-family: inherit;
+}
+
+/* Severity marker styles */
+.severity-marker-high {
+  filter: hue-rotate(0deg) saturate(2);
+}
+.severity-marker-medium {
+  filter: hue-rotate(50deg) saturate(1.8);
+}
+.severity-marker-low {
+  filter: hue-rotate(120deg) saturate(1.5);
+}
+
+/* Dark mode styles for Leaflet popups */
+.dark .leaflet-popup-content-wrapper,
+.dark .leaflet-popup-tip {
+  background-color: #1f1f3a !important;
+  color: #e2e8f0 !important;
+  border: 1px solid rgba(148, 163, 184, 0.1) !important;
+  box-shadow: 0 4px 12px rgba(15, 15, 30, 0.6) !important;
+}
+
+.dark .leaflet-popup-close-button {
+  color: #94a3b8 !important;
+}
+
+

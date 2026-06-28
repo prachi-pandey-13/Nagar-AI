@@ -1,0 +1,10 @@
+{
+  "name": "Nagar AI",
+  "description": "Voice of Your Neighbourhood - A civic issue reporting and tracking web application where residents can report civic issues like potholes, broken streetlights, waste, and water leakage. The issues are analyzed by Gemini, routed to respective departments, shown in real-time feeds and Leaflet.js maps, and managed through a simple admin panel.",
+  "requestFramePermissions": [
+    "geolocation"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

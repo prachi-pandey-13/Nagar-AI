@@ -1,0 +1,64 @@
+{
+  "entities": {
+    "Issue": {
+      "title": "Civic Issue",
+      "description": "A community reported civic issue",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "title": { "type": "string" },
+        "description": { "type": "string" },
+        "imageUrl": { "type": "string" },
+        "category": { "type": "string" },
+        "severity": { "type": "string", "enum": ["low", "medium", "high"] },
+        "department": { "type": "string" },
+        "status": { "type": "string", "enum": ["Reported", "In Review", "Resolved"] },
+        "latitude": { "type": "number" },
+        "longitude": { "type": "number" },
+        "reporterId": { "type": "string" },
+        "reporterName": { "type": "string" },
+        "reporterEmail": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "upvotesCount": { "type": "integer" }
+      },
+      "required": ["id", "title", "description", "imageUrl", "category", "severity", "department", "status", "latitude", "longitude", "reporterId", "reporterName", "reporterEmail", "createdAt", "upvotesCount"]
+    },
+    "Upvote": {
+      "title": "Issue Upvote",
+      "description": "An upvote for an issue by a user",
+      "type": "object",
+      "properties": {
+        "voterId": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["voterId", "createdAt"]
+    },
+    "Reporter": {
+      "title": "Reporter",
+      "description": "A user who reports issues, for the leaderboard",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "name": { "type": "string" },
+        "email": { "type": "string" },
+        "photoURL": { "type": "string" },
+        "issueCount": { "type": "integer" }
+      },
+      "required": ["uid", "name", "email", "issueCount"]
+    }
+  },
+  "firestore": {
+    "issues": {
+      "schema": "Issue",
+      "description": "List of reported issues"
+    },
+    "issues/{issueId}/upvotes/{userId}": {
+      "schema": "Upvote",
+      "description": "Subcollection to track unique user upvotes for each issue"
+    },
+    "reporters": {
+      "schema": "Reporter",
+      "description": "List of reporters for leaderboard tracking"
+    }
+  }
+}
