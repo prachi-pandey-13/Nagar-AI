@@ -63,39 +63,92 @@ async function startServer() {
 5. "description": Write a polite, detailed, and objective summary describing the civic issue observed in the photo.`,
       };
 
-      const response = await ai.models.generateContent({
-        model: "gemini-3.5-flash",
-        contents: { parts: [imagePart, promptPart] },
-        config: {
-          responseMimeType: "application/json",
-          responseSchema: {
-            type: Type.OBJECT,
-            properties: {
-              category: {
-                type: Type.STRING,
-                description: "Classified civic issue category. Must be one of: pothole, broken streetlight, waste, water leakage, public infrastructure, other",
-              },
-              severity: {
-                type: Type.STRING,
-                description: "The safety severity level. Must be one of: low, medium, high",
-              },
-              department: {
-                type: Type.STRING,
-                description: "The suggested local government department to route this report to",
-              },
-              title: {
-                type: Type.STRING,
-                description: "A short, professional title describing the issue",
-              },
-              description: {
-                type: Type.STRING,
-                description: "A clear, professional summary describing what needs to be fixed",
+      const maxRetries = 3;
+      const delayMs = 2000;
+      let attempt = 0;
+      let lastError: any = null;
+      let response = null;
+
+      const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+      while (attempt <= maxRetries) {
+        try {
+          // Model fallback: Primary is gemini-3.5-flash, fallback is gemini-1.5-flash
+          const currentModel = attempt === 0 ? "gemini-3.5-flash" : "gemini-1.5-flash";
+          console.log(`[Gemini API] Classification attempt ${attempt + 1}/${maxRetries + 1} using model: ${currentModel}`);
+
+          response = await ai.models.generateContent({
+            model: currentModel,
+            contents: { parts: [imagePart, promptPart] },
+            config: {
+              responseMimeType: "application/json",
+              responseSchema: {
+                type: Type.OBJECT,
+                properties: {
+                  category: {
+                    type: Type.STRING,
+                    description: "Classified civic issue category. Must be one of: pothole, broken streetlight, waste, water leakage, public infrastructure, other",
+                  },
+                  severity: {
+                    type: Type.STRING,
+                    description: "The safety severity level. Must be one of: low, medium, high",
+                  },
+                  department: {
+                    type: Type.STRING,
+                    description: "The suggested local government department to route this report to",
+                  },
+                  title: {
+                    type: Type.STRING,
+                    description: "A short, professional title describing the issue",
+                  },
+                  description: {
+                    type: Type.STRING,
+                    description: "A clear, professional summary describing what needs to be fixed",
+                  },
+                },
+                required: ["category", "severity", "department", "title", "description"],
               },
             },
-            required: ["category", "severity", "department", "title", "description"],
-          },
-        },
-      });
+          });
+
+          // Successfully received a response, so break out of the retry loop
+          break;
+        } catch (error: any) {
+          lastError = error;
+          attempt++;
+
+          console.error(`[Gemini API] Attempt ${attempt} failed with error:`, error);
+
+          // We check for 503 status code or high demand / overloaded messages
+          const is503 = 
+            error.status === 503 || 
+            error.statusCode === 503 ||
+            error.status === "503" ||
+            error.statusCode === "503" ||
+            (error.message && (
+              error.message.includes("503") || 
+              error.message.toLowerCase().includes("high demand") || 
+              error.message.toLowerCase().includes("busy") || 
+              error.message.toLowerCase().includes("overloaded") ||
+              error.message.toLowerCase().includes("unavailable")
+            ));
+
+          if (is503 && attempt <= maxRetries) {
+            console.log(`[Gemini API] 503 or high demand detected. Retrying in ${delayMs / 1000} seconds...`);
+            await sleep(delayMs);
+          } else {
+            // Propagate any other kind of error or if we've exhausted our retries
+            break;
+          }
+        }
+      }
+
+      if (!response) {
+        console.error("[Gemini API] All attempts failed. Throwing user-friendly busy error.");
+        return res.status(503).json({
+          error: "AI analysis is temporarily busy. Please click 'Analyze with Gemini AI' again in a few seconds."
+        });
+      }
 
       const responseText = response.text;
       if (!responseText) {

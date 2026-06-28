@@ -407,7 +407,7 @@ export default function ReportPage({ user, onSuccess }: ReportPageProps) {
                 {isClassifying ? (
                   <>
                     <Loader2 className="h-4 w-4 animate-spin" />
-                    <span>Gemini is analyzing...</span>
+                    <span>Analyzing your image...</span>
                   </>
                 ) : (
                   <>
