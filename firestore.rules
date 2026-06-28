@@ -45,13 +45,15 @@ service cloud.firestore {
         && data.latitude is number
         && data.longitude is number
         && data.upvotesCount is int
+        && (!('videoUrl' in data) || (data.videoUrl is string && data.videoUrl.size() <= 15000000))
         && (
           // Signed-in reporter check
           (isVerified() && data.reporterId == request.auth.uid && data.reporterEmail == request.auth.token.email && data.reporterName is string && data.reporterName.size() <= 100)
           ||
           // Anonymous reporter check
-          (data.reporterName == "Anonymous Citizen" && data.reporterEmail == "" && data.reporterId.startsWith("anon_"))
-        );
+          (data.reporterName == "Anonymous Citizen" && (data.reporterEmail == "" || data.reporterEmail == "anonymous@nagarai.app") && data.reporterId.startsWith("anon_"))
+        )
+        && (!('isAnonymous' in data) || data.isAnonymous is bool);
     }
 
     // Reporter Entity Validation Helper
@@ -62,15 +64,16 @@ service cloud.firestore {
         && (
           (isVerified() && data.uid == request.auth.uid && data.email == request.auth.token.email && data.photoURL is string && data.photoURL.size() <= 1000)
           ||
-          (data.uid.startsWith("anon_") && data.name == "Anonymous Citizen" && data.email == "" && data.photoURL == "")
-        );
+          (data.uid.startsWith("anon_") && data.name == "Anonymous Citizen" && (data.email == "" || data.email == "anonymous@nagarai.app") && data.photoURL == "")
+        )
+        && (!('isAnonymous' in data) || data.isAnonymous is bool);
     }
 
     // Issues Collection Rules
     match /issues/{issueId} {
       allow read: if true;
       
-      allow create: if (isVerified() || (incoming().reporterName == "Anonymous Citizen" && incoming().reporterEmail == "" && incoming().reporterId.startsWith("anon_")))
+      allow create: if (isVerified() || (incoming().reporterName == "Anonymous Citizen" && (incoming().reporterEmail == "" || incoming().reporterEmail == "anonymous@nagarai.app") && incoming().reporterId.startsWith("anon_")))
         && isValidId(issueId) 
         && issueId == incoming().id
         && isValidIssue(incoming())
@@ -110,7 +113,7 @@ service cloud.firestore {
     match /reporters/{userId} {
       allow read: if true;
       
-      allow create: if (isVerified() || (userId.startsWith("anon_") && incoming().name == "Anonymous Citizen" && incoming().email == "" && incoming().photoURL == ""))
+      allow create: if (isVerified() || (userId.startsWith("anon_") && incoming().name == "Anonymous Citizen" && (incoming().email == "" || incoming().email == "anonymous@nagarai.app") && incoming().photoURL == ""))
         && userId == incoming().uid
         && isValidReporter(incoming())
         && incoming().issueCount == 1;

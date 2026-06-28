@@ -17,9 +17,88 @@ interface AIResult {
   description: string;
 }
 
+function extractVideoFrameAndBase64(file: File): Promise<{ thumbnailBase64: string; videoBase64: string; mimeType: string }> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const videoBase64 = reader.result as string;
+      const videoUrl = URL.createObjectURL(file);
+      const video = document.createElement("video");
+      video.src = videoUrl;
+      video.crossOrigin = "anonymous";
+      video.muted = true;
+      video.playsInline = true;
+
+      let resolved = false;
+      const timeoutId = setTimeout(() => {
+        if (!resolved) {
+          resolved = true;
+          console.warn("Video frame seek timed out, resolving with video base64 only.");
+          URL.revokeObjectURL(videoUrl);
+          resolve({
+            thumbnailBase64: "",
+            videoBase64,
+            mimeType: file.type
+          });
+        }
+      }, 5000);
+
+      video.addEventListener("loadedmetadata", () => {
+        video.currentTime = Math.min(0.5, video.duration / 2);
+      });
+
+      video.addEventListener("seeked", () => {
+        if (resolved) return;
+        resolved = true;
+        clearTimeout(timeoutId);
+        try {
+          const canvas = document.createElement("canvas");
+          canvas.width = video.videoWidth || 640;
+          canvas.height = video.videoHeight || 360;
+          const ctx = canvas.getContext("2d");
+          if (ctx) {
+            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+            const thumbnailBase64 = canvas.toDataURL("image/jpeg", 0.7);
+            URL.revokeObjectURL(videoUrl);
+            resolve({
+              thumbnailBase64,
+              videoBase64,
+              mimeType: file.type
+            });
+          } else {
+            URL.revokeObjectURL(videoUrl);
+            resolve({
+              thumbnailBase64: "",
+              videoBase64,
+              mimeType: file.type
+            });
+          }
+        } catch (err) {
+          URL.revokeObjectURL(videoUrl);
+          reject(err);
+        }
+      });
+
+      video.addEventListener("error", (e) => {
+        if (resolved) return;
+        resolved = true;
+        clearTimeout(timeoutId);
+        URL.revokeObjectURL(videoUrl);
+        reject(e);
+      });
+
+      video.load();
+    };
+    reader.onerror = (err) => reject(err);
+    reader.readAsDataURL(file);
+  });
+}
+
 export default function ReportPage({ user, onSuccess }: ReportPageProps) {
   const [image, setImage] = useState<string | null>(null);
   const [imageMimeType, setImageMimeType] = useState<string>("");
+  const [video, setVideo] = useState<string | null>(null);
+  const [videoMimeType, setVideoMimeType] = useState<string>("");
   const [dragActive, setDragActive] = useState<boolean>(false);
   const [coords, setCoords] = useState<{ lat: number; lng: number } | null>(null);
   const [locationStatus, setLocationStatus] = useState<"idle" | "getting" | "success" | "denied">("idle");
@@ -71,20 +150,41 @@ export default function ReportPage({ user, onSuccess }: ReportPageProps) {
     }
   };
 
-  const processFile = (file: File) => {
-    if (!file.type.startsWith("image/")) {
-      setError("Please upload an image file (PNG, JPG, JPEG).");
-      return;
-    }
+  const processFile = async (file: File) => {
+    setError(null);
+    setAiResult(null);
 
-    setImageMimeType(file.type);
-    const reader = new FileReader();
-    reader.onload = () => {
-      setImage(reader.result as string);
-      setError(null);
-      setAiResult(null); // Reset past AI classification if new photo added
-    };
-    reader.readAsDataURL(file);
+    if (file.type.startsWith("video/")) {
+      const allowedVideoTypes = ["video/mp4", "video/quicktime", "video/webm"];
+      if (!allowedVideoTypes.includes(file.type)) {
+        setError("Please upload a supported video file (MP4, MOV, WEBM).");
+        return;
+      }
+      setIsClassifying(true);
+      try {
+        const result = await extractVideoFrameAndBase64(file);
+        setImage(result.thumbnailBase64);
+        setImageMimeType("image/jpeg");
+        setVideo(result.videoBase64);
+        setVideoMimeType(result.mimeType);
+      } catch (err) {
+        console.error("Video processing error:", err);
+        setError("Failed to process the video. Please try again or upload an image.");
+      } finally {
+        setIsClassifying(false);
+      }
+    } else if (file.type.startsWith("image/")) {
+      setImageMimeType(file.type);
+      setVideo(null);
+      setVideoMimeType("");
+      const reader = new FileReader();
+      reader.onload = () => {
+        setImage(reader.result as string);
+      };
+      reader.readAsDataURL(file);
+    } else {
+      setError("Please upload an image (PNG, JPG, JPEG) or video file (MP4, MOV, WEBM).");
+    }
   };
 
   const handleDrop = (e: React.DragEvent) => {
@@ -149,10 +249,11 @@ export default function ReportPage({ user, onSuccess }: ReportPageProps) {
     const issueId = "issue_" + Math.random().toString(36).substring(2, 15);
     const issuePath = `issues/${issueId}`;
 
-    const anonId = "anon_" + Math.random().toString(36).substring(2, 10);
+    const randPart = Math.random().toString(36).substring(2, 7);
+    const anonId = "anon_" + Date.now() + randPart;
     const finalReporterId = reportAnonymously ? anonId : (user?.uid || anonId);
     const finalReporterName = reportAnonymously ? "Anonymous Citizen" : (user?.displayName || "Anonymous User");
-    const finalReporterEmail = reportAnonymously ? "" : (user?.email || "");
+    const finalReporterEmail = reportAnonymously ? "anonymous@nagarai.app" : (user?.email || "");
     const finalPhotoURL = reportAnonymously ? "" : (user?.photoURL || "");
 
     try {
@@ -160,7 +261,7 @@ export default function ReportPage({ user, onSuccess }: ReportPageProps) {
 
       // Create Issue Document
       const issueRef = doc(db, "issues", issueId);
-      batch.set(issueRef, {
+      const issueData: any = {
         id: issueId,
         title: aiResult.title,
         description: `${aiResult.description}${additionalComments ? `\n\nUser Notes: ${additionalComments}` : ""}`,
@@ -174,9 +275,16 @@ export default function ReportPage({ user, onSuccess }: ReportPageProps) {
         reporterId: finalReporterId,
         reporterName: finalReporterName,
         reporterEmail: finalReporterEmail,
+        isAnonymous: reportAnonymously,
         createdAt: serverTimestamp(),
         upvotesCount: 0,
-      });
+      };
+
+      if (video) {
+        issueData.videoUrl = video;
+      }
+
+      batch.set(issueRef, issueData);
 
       // Update/Increment Reporter Count
       const reporterRef = doc(db, "reporters", finalReporterId);
@@ -196,6 +304,7 @@ export default function ReportPage({ user, onSuccess }: ReportPageProps) {
           email: finalReporterEmail,
           photoURL: finalPhotoURL,
           issueCount: 1,
+          isAnonymous: reportAnonymously,
         });
       }
 
@@ -329,11 +438,27 @@ export default function ReportPage({ user, onSuccess }: ReportPageProps) {
               ref={fileInputRef}
               type="file"
               className="hidden"
-              accept="image/*"
+              accept="image/*,video/mp4,video/quicktime,video/webm"
               onChange={handleFileChange}
             />
 
-            {image ? (
+            {video ? (
+              <div className="relative">
+                <video
+                  src={video}
+                  controls
+                  className="max-h-80 mx-auto rounded-xl object-contain border border-slate-200 dark:border-slate-800"
+                />
+                <button
+                  type="button"
+                  id="btn-change-video"
+                  onClick={onButtonClick}
+                  className="mt-4 px-4 py-1.5 text-xs font-semibold text-slate-700 dark:text-slate-300 bg-slate-50 dark:bg-[#1a1a2e] border border-slate-200 dark:border-slate-800 rounded hover:bg-slate-100 dark:hover:bg-[#1f1f3a] transition-all block mx-auto"
+                >
+                  Change Video
+                </button>
+              </div>
+            ) : image ? (
               <div className="relative">
                 <img
                   src={image}
@@ -341,9 +466,10 @@ export default function ReportPage({ user, onSuccess }: ReportPageProps) {
                   className="max-h-80 mx-auto rounded-xl object-contain border border-slate-200 dark:border-slate-800"
                 />
                 <button
+                  type="button"
                   id="btn-change-photo"
                   onClick={onButtonClick}
-                  className="mt-4 px-4 py-1.5 text-xs font-semibold text-slate-700 dark:text-slate-300 bg-slate-50 dark:bg-[#1a1a2e] border border-slate-200 dark:border-slate-800 rounded hover:bg-slate-100 dark:hover:bg-[#1f1f3a] transition-all"
+                  className="mt-4 px-4 py-1.5 text-xs font-semibold text-slate-700 dark:text-slate-300 bg-slate-50 dark:bg-[#1a1a2e] border border-slate-200 dark:border-slate-800 rounded hover:bg-slate-100 dark:hover:bg-[#1f1f3a] transition-all block mx-auto"
                 >
                   Change Photo
                 </button>
@@ -353,8 +479,8 @@ export default function ReportPage({ user, onSuccess }: ReportPageProps) {
                 <div className="bg-slate-50 dark:bg-[#1a1a2e] text-slate-500 dark:text-slate-400 p-4 rounded-full mb-4">
                   <Upload className="h-6 w-6" />
                 </div>
-                <p className="text-slate-800 dark:text-slate-200 font-bold text-sm">Drag & drop your issue photo here, or click to browse</p>
-                <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">Supports PNG, JPG, JPEG up to 10MB</p>
+                <p className="text-slate-800 dark:text-slate-200 font-bold text-sm">Drag & drop your issue photo/video here, or click to browse</p>
+                <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">Supports PNG, JPG, JPEG, MP4, MOV, WEBM up to 15MB</p>
               </div>
             )}
           </div>

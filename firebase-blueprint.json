@@ -19,7 +19,9 @@
         "reporterName": { "type": "string" },
         "reporterEmail": { "type": "string" },
         "createdAt": { "type": "string", "format": "date-time" },
-        "upvotesCount": { "type": "integer" }
+        "upvotesCount": { "type": "integer" },
+        "isAnonymous": { "type": "boolean" },
+        "videoUrl": { "type": "string" }
       },
       "required": ["id", "title", "description", "imageUrl", "category", "severity", "department", "status", "latitude", "longitude", "reporterId", "reporterName", "reporterEmail", "createdAt", "upvotesCount"]
     },
@@ -42,7 +44,8 @@
         "name": { "type": "string" },
         "email": { "type": "string" },
         "photoURL": { "type": "string" },
-        "issueCount": { "type": "integer" }
+        "issueCount": { "type": "integer" },
+        "isAnonymous": { "type": "boolean" }
       },
       "required": ["uid", "name", "email", "issueCount"]
     }
