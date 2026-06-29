@@ -14,7 +14,6 @@ export interface Issue {
   reporterEmail: string;
   createdAt: any; // Firestore Timestamp
   upvotesCount: number;
-  isAnonymous?: boolean;
   videoUrl?: string;
 }
 
@@ -24,7 +23,6 @@ export interface Reporter {
   email: string;
   photoURL: string;
   issueCount: number;
-  isAnonymous?: boolean;
 }
 
 export interface Upvote {

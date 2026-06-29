@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useRef } from "react";
-import { User } from "firebase/auth";
-import { collection, doc, writeBatch, getDoc, serverTimestamp } from "firebase/firestore";
-import { db, handleFirestoreError, OperationType } from "../firebase";
-import { Upload, MapPin, Loader2, Sparkles, AlertCircle, CheckCircle, ShieldCheck } from "lucide-react";
+import { User, signInWithPopup, GoogleAuthProvider } from "firebase/auth";
+import { collection, doc, writeBatch, getDoc, serverTimestamp, setDoc, updateDoc } from "firebase/firestore";
+import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
+import { db, storage, auth, handleFirestoreError, OperationType } from "../firebase";
+import { Upload, MapPin, Loader2, Sparkles, AlertCircle, CheckCircle, ShieldCheck, LogIn } from "lucide-react";
 
 interface ReportPageProps {
   user: User | null;
@@ -17,80 +18,62 @@ interface AIResult {
   description: string;
 }
 
-function extractVideoFrameAndBase64(file: File): Promise<{ thumbnailBase64: string; videoBase64: string; mimeType: string }> {
+function extractVideoFrame(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      const videoBase64 = reader.result as string;
-      const videoUrl = URL.createObjectURL(file);
-      const video = document.createElement("video");
-      video.src = videoUrl;
-      video.crossOrigin = "anonymous";
-      video.muted = true;
-      video.playsInline = true;
+    const videoUrl = URL.createObjectURL(file);
+    const video = document.createElement("video");
+    video.src = videoUrl;
+    video.crossOrigin = "anonymous";
+    video.muted = true;
+    video.playsInline = true;
 
-      let resolved = false;
-      const timeoutId = setTimeout(() => {
-        if (!resolved) {
-          resolved = true;
-          console.warn("Video frame seek timed out, resolving with video base64 only.");
-          URL.revokeObjectURL(videoUrl);
-          resolve({
-            thumbnailBase64: "",
-            videoBase64,
-            mimeType: file.type
-          });
-        }
-      }, 5000);
-
-      video.addEventListener("loadedmetadata", () => {
-        video.currentTime = Math.min(0.5, video.duration / 2);
-      });
-
-      video.addEventListener("seeked", () => {
-        if (resolved) return;
+    let resolved = false;
+    const timeoutId = setTimeout(() => {
+      if (!resolved) {
         resolved = true;
-        clearTimeout(timeoutId);
-        try {
-          const canvas = document.createElement("canvas");
-          canvas.width = video.videoWidth || 640;
-          canvas.height = video.videoHeight || 360;
-          const ctx = canvas.getContext("2d");
-          if (ctx) {
-            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-            const thumbnailBase64 = canvas.toDataURL("image/jpeg", 0.7);
-            URL.revokeObjectURL(videoUrl);
-            resolve({
-              thumbnailBase64,
-              videoBase64,
-              mimeType: file.type
-            });
-          } else {
-            URL.revokeObjectURL(videoUrl);
-            resolve({
-              thumbnailBase64: "",
-              videoBase64,
-              mimeType: file.type
-            });
-          }
-        } catch (err) {
-          URL.revokeObjectURL(videoUrl);
-          reject(err);
-        }
-      });
-
-      video.addEventListener("error", (e) => {
-        if (resolved) return;
-        resolved = true;
-        clearTimeout(timeoutId);
+        console.warn("Video frame seek timed out, resolving with empty string.");
         URL.revokeObjectURL(videoUrl);
-        reject(e);
-      });
+        resolve("");
+      }
+    }, 5000);
 
-      video.load();
-    };
-    reader.onerror = (err) => reject(err);
-    reader.readAsDataURL(file);
+    video.addEventListener("loadedmetadata", () => {
+      video.currentTime = 0.1;
+    });
+
+    video.addEventListener("seeked", () => {
+      if (resolved) return;
+      resolved = true;
+      clearTimeout(timeoutId);
+      try {
+        const canvas = document.createElement("canvas");
+        canvas.width = video.videoWidth || 640;
+        canvas.height = video.videoHeight || 360;
+        const ctx = canvas.getContext("2d");
+        if (ctx) {
+          ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+          const thumbnailBase64 = canvas.toDataURL("image/jpeg", 0.7);
+          URL.revokeObjectURL(videoUrl);
+          resolve(thumbnailBase64);
+        } else {
+          URL.revokeObjectURL(videoUrl);
+          resolve("");
+        }
+      } catch (err) {
+        URL.revokeObjectURL(videoUrl);
+        reject(err);
+      }
+    });
+
+    video.addEventListener("error", (e) => {
+      if (resolved) return;
+      resolved = true;
+      clearTimeout(timeoutId);
+      URL.revokeObjectURL(videoUrl);
+      reject(e);
+    });
+
+    video.load();
   });
 }
 
@@ -99,6 +82,7 @@ export default function ReportPage({ user, onSuccess }: ReportPageProps) {
   const [imageMimeType, setImageMimeType] = useState<string>("");
   const [video, setVideo] = useState<string | null>(null);
   const [videoMimeType, setVideoMimeType] = useState<string>("");
+  const [videoFile, setVideoFile] = useState<File | null>(null);
   const [dragActive, setDragActive] = useState<boolean>(false);
   const [coords, setCoords] = useState<{ lat: number; lng: number } | null>(null);
   const [locationStatus, setLocationStatus] = useState<"idle" | "getting" | "success" | "denied">("idle");
@@ -108,7 +92,15 @@ export default function ReportPage({ user, onSuccess }: ReportPageProps) {
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
   const [submitSuccess, setSubmitSuccess] = useState<boolean>(false);
-  const [reportAnonymously, setReportAnonymously] = useState<boolean>(false);
+
+  const handleGoogleSignIn = async () => {
+    try {
+      const provider = new GoogleAuthProvider();
+      await signInWithPopup(auth, provider);
+    } catch (error) {
+      console.error("Sign in failed:", error);
+    }
+  };
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -162,11 +154,13 @@ export default function ReportPage({ user, onSuccess }: ReportPageProps) {
       }
       setIsClassifying(true);
       try {
-        const result = await extractVideoFrameAndBase64(file);
-        setImage(result.thumbnailBase64);
+        const thumbnail = await extractVideoFrame(file);
+        setImage(thumbnail);
         setImageMimeType("image/jpeg");
-        setVideo(result.videoBase64);
-        setVideoMimeType(result.mimeType);
+        const previewUrl = URL.createObjectURL(file);
+        setVideo(previewUrl);
+        setVideoMimeType(file.type);
+        setVideoFile(file);
       } catch (err) {
         console.error("Video processing error:", err);
         setError("Failed to process the video. Please try again or upload an image.");
@@ -177,6 +171,7 @@ export default function ReportPage({ user, onSuccess }: ReportPageProps) {
       setImageMimeType(file.type);
       setVideo(null);
       setVideoMimeType("");
+      setVideoFile(null);
       const reader = new FileReader();
       reader.onload = () => {
         setImage(reader.result as string);
@@ -238,7 +233,12 @@ export default function ReportPage({ user, onSuccess }: ReportPageProps) {
   };
 
   const handleSubmitReport = async () => {
-    if ((!reportAnonymously && !user) || !image || !aiResult) return;
+    if (!user) {
+      setError("You must be signed in to submit a report.");
+      return;
+    }
+
+    if (!image || !aiResult) return;
     setIsSubmitting(true);
     setError(null);
 
@@ -249,15 +249,18 @@ export default function ReportPage({ user, onSuccess }: ReportPageProps) {
     const issueId = "issue_" + Math.random().toString(36).substring(2, 15);
     const issuePath = `issues/${issueId}`;
 
-    const randPart = Math.random().toString(36).substring(2, 7);
-    const anonId = "anon_" + Date.now() + randPart;
-    const finalReporterId = reportAnonymously ? anonId : (user?.uid || anonId);
-    const finalReporterName = reportAnonymously ? "Anonymous Citizen" : (user?.displayName || "Anonymous User");
-    const finalReporterEmail = reportAnonymously ? "anonymous@nagarai.app" : (user?.email || "");
-    const finalPhotoURL = reportAnonymously ? "" : (user?.photoURL || "");
+    const finalReporterId = user.uid;
+    const finalReporterName = user.displayName || "Anonymous User";
+    const finalReporterEmail = user.email || "";
+    const finalPhotoURL = user.photoURL || "";
 
     try {
-      const batch = writeBatch(db);
+      let uploadedVideoUrl = "";
+      if (videoFile) {
+        const videoStorageRef = ref(storage, `videos/${Date.now()}_${videoFile.name}`);
+        const uploadResult = await uploadBytes(videoStorageRef, videoFile);
+        uploadedVideoUrl = await getDownloadURL(uploadResult.ref);
+      }
 
       // Create Issue Document
       const issueRef = doc(db, "issues", issueId);
@@ -275,16 +278,16 @@ export default function ReportPage({ user, onSuccess }: ReportPageProps) {
         reporterId: finalReporterId,
         reporterName: finalReporterName,
         reporterEmail: finalReporterEmail,
-        isAnonymous: reportAnonymously,
         createdAt: serverTimestamp(),
         upvotesCount: 0,
       };
 
-      if (video) {
-        issueData.videoUrl = video;
+      if (uploadedVideoUrl) {
+        issueData.videoUrl = uploadedVideoUrl;
       }
 
-      batch.set(issueRef, issueData);
+      // Directly write to Firestore
+      await setDoc(issueRef, issueData);
 
       // Update/Increment Reporter Count
       const reporterRef = doc(db, "reporters", finalReporterId);
@@ -292,23 +295,21 @@ export default function ReportPage({ user, onSuccess }: ReportPageProps) {
 
       if (reporterSnap.exists()) {
         const currentData = reporterSnap.data();
-        batch.update(reporterRef, {
+        await updateDoc(reporterRef, {
           issueCount: (currentData.issueCount || 0) + 1,
           name: finalReporterName,
           photoURL: finalPhotoURL,
         });
       } else {
-        batch.set(reporterRef, {
+        await setDoc(reporterRef, {
           uid: finalReporterId,
           name: finalReporterName,
           email: finalReporterEmail,
           photoURL: finalPhotoURL,
           issueCount: 1,
-          isAnonymous: reportAnonymously,
         });
       }
 
-      await batch.commit();
       setSubmitSuccess(true);
       setTimeout(() => {
         onSuccess(); // Switch back to feed
@@ -333,7 +334,7 @@ export default function ReportPage({ user, onSuccess }: ReportPageProps) {
     }
   };
 
-  if (!user && !reportAnonymously) {
+  if (!user) {
     return (
       <div id="signin-prompt" className="flex flex-col items-center justify-center py-20 px-4 text-center max-w-md mx-auto">
         <div className="bg-green-50 dark:bg-green-950/20 text-green-600 dark:text-green-400 p-4 rounded-full mb-6">
@@ -344,25 +345,15 @@ export default function ReportPage({ user, onSuccess }: ReportPageProps) {
           Reporting issues like potholes, broken lights, and waste is easy. Sign in with your Google account to help improve our local community.
         </p>
         
-        {/* Toggle switch to report anonymously when not signed in */}
-        <div className="bg-white dark:bg-[#1f1f3a] border border-slate-200 dark:border-slate-800 rounded-2xl p-5 w-full mb-6 shadow-sm text-left">
-          <div className="flex items-center justify-between">
-            <div>
-              <span className="text-sm font-bold text-slate-800 dark:text-slate-100 block">Report Anonymously</span>
-              <span className="text-xs text-slate-400 dark:text-slate-500 font-semibold block mt-0.5">Skip signing in and file reports privately.</span>
-            </div>
-            <button
-              id="btn-anon-toggle-prompt"
-              onClick={() => setReportAnonymously(true)}
-              className="bg-green-600 hover:bg-green-700 text-white font-bold text-xs px-4 py-2.5 rounded-lg transition-all shadow-sm"
-            >
-              Enable
-            </button>
-          </div>
-          <p className="text-[11px] text-slate-500 dark:text-slate-400 font-medium mt-3 pt-3 border-t border-slate-100 dark:border-slate-800/80">
-            🔒 <span className="font-semibold">Privacy Note:</span> Your identity will not be shared publicly.
-          </p>
-        </div>
+        {/* Sign In Button */}
+        <button
+          id="btn-google-signin-prompt"
+          onClick={handleGoogleSignIn}
+          className="flex items-center justify-center space-x-3 w-full bg-green-600 hover:bg-green-700 text-white font-bold text-sm py-3 px-6 rounded-xl transition-all shadow-md mb-6"
+        >
+          <LogIn className="h-5 w-5" />
+          <span>Sign In with Google</span>
+        </button>
 
         <div className="text-xs text-slate-500 dark:text-slate-400 font-mono bg-slate-100 dark:bg-[#1f1f3a]/50 p-3 rounded-lg border border-slate-200 dark:border-slate-800 w-full">
           All issues are securely saved and routed to the proper city channels.
@@ -379,34 +370,6 @@ export default function ReportPage({ user, onSuccess }: ReportPageProps) {
           <h1 className="font-display font-bold text-3xl text-slate-800 dark:text-slate-100 tracking-tight">Report a Civic Issue</h1>
           <p className="text-slate-500 dark:text-slate-400 mt-1 text-sm font-medium">Upload a photo to automatically categorize and route the problem using AI.</p>
         </div>
-        
-        {/* Toggle switch on form */}
-        <div className="flex items-center space-x-3 bg-white dark:bg-[#1f1f3a] border border-slate-200 dark:border-slate-800 px-4 py-2.5 rounded-xl shadow-sm self-start md:self-auto">
-          <div className="text-left md:text-right">
-            <span className="text-xs font-bold text-slate-700 dark:text-slate-300 block">Report Anonymously</span>
-            <span className="text-[10px] text-slate-400 dark:text-slate-500 block font-medium">Your identity is hidden</span>
-          </div>
-          <button
-            id="btn-anon-toggle-form"
-            type="button"
-            onClick={() => {
-              if (reportAnonymously && !user) {
-                setReportAnonymously(false);
-              } else {
-                setReportAnonymously(!reportAnonymously);
-              }
-            }}
-            className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
-              reportAnonymously ? "bg-green-600" : "bg-slate-200 dark:bg-slate-800"
-            }`}
-          >
-            <span
-              className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
-                reportAnonymously ? "translate-x-5" : "translate-x-0"
-              }`}
-            />
-          </button>
-        </div>
       </div>
 
       {submitSuccess ? (
@@ -414,7 +377,7 @@ export default function ReportPage({ user, onSuccess }: ReportPageProps) {
           <div className="bg-green-600 text-white p-3 rounded-full mb-4 animate-bounce">
             <CheckCircle className="h-8 w-8" />
           </div>
-          <h2 className="font-display font-bold text-xl text-green-800 mb-2">Issue Reported Successfully!</h2>
+          <h2 className="font-display font-bold text-xl text-green-800 mb-2">Issue reported successfully!</h2>
           <p className="text-green-700 text-sm">Your civic issue has been logged, analyzed, and routed. Returning to feed...</p>
         </div>
       ) : (
@@ -614,7 +577,7 @@ export default function ReportPage({ user, onSuccess }: ReportPageProps) {
 
               <div className="border-t border-slate-100 dark:border-slate-800 pt-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
                 <span className="text-xs text-slate-500 dark:text-slate-400 font-medium">
-                  {reportAnonymously ? "🔒 Your identity will not be shared publicly" : ""}
+                  🔒 Your report will be associated with your verified profile.
                 </span>
                 <button
                   id="btn-submit-report"
